@@ -1,40 +1,42 @@
 import os
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+import requests
+from flask import Flask, request
 
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # e.g. https://xxx.up.railway.app/telegram
 
-BOT_TOKEN = os.environ["BOT_TOKEN"]
-PUBLIC_URL = os.environ["PUBLIC_URL"]  # 例如 https://room-bot-production-3743.up.railway.app
-WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "telegram")  # 可唔填，預設 telegram
+if not BOT_TOKEN or not WEBHOOK_URL:
+    raise RuntimeError("Missing BOT_TOKEN or WEBHOOK_URL")
 
+API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ The system is online.")
+app = Flask(__name__)
 
+# 設定 webhook（每次啟動都 set 一次，最穩）
+def set_webhook():
+    r = requests.get(f"{API}/setWebhook", params={"url": WEBHOOK_URL})
+    print("setWebhook:", r.status_code, r.text)
 
-async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏓 pong")
+@app.route("/telegram", methods=["POST"])
+def telegram_webhook():
+    update = request.get_json(force=True)
 
+    # 最簡單測試：收到任何訊息就回覆 "OK"
+    message = update.get("message")
+    if message and "chat" in message:
+        chat_id = message["chat"]["id"]
+        requests.post(f"{API}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": "✅ Webhook received. Bot is working."
+        })
 
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    return "ok", 200
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ping", ping))
-
-    port = int(os.environ.get("PORT", "8080"))
-    webhook_url = f"{PUBLIC_URL}/{WEBHOOK_PATH}".rstrip("/")
-
-    # Railway: 用 webhook，不要用 run_polling
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path=WEBHOOK_PATH,
-        webhook_url=webhook_url,
-        drop_pending_updates=True,
-        allowed_updates=["message", "channel_post"],
-    )
-
+@app.route("/", methods=["GET"])
+def health():
+    return "alive", 200
 
 if __name__ == "__main__":
-    main()
+    set_webhook()
+    port = int(os.getenv("PORT", "8080"))
+    app.run(host="0.0.0.0", port=port)
